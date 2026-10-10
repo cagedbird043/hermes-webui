@@ -4267,6 +4267,53 @@ def _is_valid_image(path: Path, mime: str) -> bool:
     return False
 
 
+# Native embeds are capped to a common denominator every vision provider
+# accepts: provider pipelines downscale anything larger anyway (Claude ~1568px,
+# OpenAI high detail 2048px), so oversized originals only cost upload time and
+# trip per-image byte limits (Anthropic: 5 MB base64).
+_NATIVE_IMAGE_MAX_EDGE = 2048
+_NATIVE_IMAGE_REENCODE_BYTES = 3 * 1024 * 1024
+_NATIVE_IMAGE_JPEG_QUALITY = 85
+
+
+def _downscale_for_native_embed(raw: bytes, mime: str) -> tuple[bytes, str]:
+    """Fit an image to ``_NATIVE_IMAGE_MAX_EDGE`` before it is base64-embedded.
+
+    Applies EXIF orientation, resizes the long edge, and re-encodes as JPEG
+    (PNG when the image has transparency). Images already within the edge and
+    byte budget, SVG/GIF, and anything Pillow cannot decode are returned
+    unchanged with their original MIME type.
+    """
+    mime_base = mime.split(';', 1)[0]
+    if mime_base in ('image/svg+xml', 'image/gif'):
+        return raw, mime
+    try:
+        import io
+        from PIL import Image, ImageOps
+
+        with Image.open(io.BytesIO(raw)) as img:
+            edge_ok = max(img.size) <= _NATIVE_IMAGE_MAX_EDGE
+            if edge_ok and len(raw) <= _NATIVE_IMAGE_REENCODE_BYTES:
+                return raw, mime
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((_NATIVE_IMAGE_MAX_EDGE, _NATIVE_IMAGE_MAX_EDGE), Image.Resampling.LANCZOS)
+            has_alpha = img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
+            out = io.BytesIO()
+            if has_alpha:
+                img.save(out, format='PNG', optimize=True)
+                new_mime = 'image/png'
+            else:
+                img.convert('RGB').save(out, format='JPEG', quality=_NATIVE_IMAGE_JPEG_QUALITY, optimize=True)
+                new_mime = 'image/jpeg'
+    except Exception:
+        return raw, mime
+    encoded = out.getvalue()
+    if edge_ok and len(encoded) >= len(raw):
+        # Byte-triggered re-encode that did not help: the original is within the edge cap.
+        return raw, mime
+    return encoded, new_mime
+
+
 def _explicit_text_signal(cfg: dict) -> bool:
     """True when the user has explicitly opted into the text (vision_analyze)
     image pipeline.
@@ -4435,7 +4482,8 @@ def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachme
             mime = str(att.get('mime') or '').strip() or (mimetypes.guess_type(path.name)[0] or '')
             if not mime.startswith('image/') or not _is_valid_image(path, mime):
                 continue
-            data = base64.b64encode(path.read_bytes()).decode('ascii')
+            raw, mime = _downscale_for_native_embed(path.read_bytes(), mime)
+            data = base64.b64encode(raw).decode('ascii')
         except Exception:
             continue
         parts.append({
