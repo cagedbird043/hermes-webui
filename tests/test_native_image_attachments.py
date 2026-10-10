@@ -432,6 +432,64 @@ class TestBuildNativeMultimodalMessage:
             assert isinstance(result, str)
 
 
+# ── native embed downscale ──────────────────────────────────────────────────
+
+class TestNativeEmbedDownscale:
+    """Embedded images are capped to a 2048px long edge before base64 encoding."""
+
+    @staticmethod
+    def _embed(path: Path, mime: str):
+        PIL_Image = pytest.importorskip('PIL.Image')
+        atts = _normalize_chat_attachments([{
+            'name': path.name, 'path': str(path),
+            'mime': mime, 'size': path.stat().st_size, 'is_image': True,
+        }])
+        result = _build_native_multimodal_message('', 'look', atts, str(path.parent))
+        url = result[1]['image_url']['url']
+        header, data = url.split(',', 1)
+        raw = base64.b64decode(data)
+        import io
+        with PIL_Image.open(io.BytesIO(raw)) as img:
+            return header, raw, img.size
+
+    def test_超出最长边的照片缩到2048并转为JPEG(self):
+        Image = pytest.importorskip('PIL.Image')
+        with TemporaryDirectory() as d:
+            p = Path(d) / 'big.png'
+            Image.new('RGB', (4096, 3072), (200, 120, 40)).save(p)
+            header, _, size = self._embed(p, 'image/png')
+            assert header == 'data:image/jpeg;base64'
+            assert size == (2048, 1536)
+
+    def test_缩图时按EXIF方向转正(self):
+        Image = pytest.importorskip('PIL.Image')
+        with TemporaryDirectory() as d:
+            p = Path(d) / 'rotated.jpg'
+            exif = Image.Exif()
+            exif[0x0112] = 6  # Orientation: rotate 90° CW to display
+            Image.new('RGB', (3000, 1000), (10, 90, 160)).save(p, exif=exif)
+            _, _, size = self._embed(p, 'image/jpeg')
+            assert size == (683, 2048)
+
+    def test_带透明通道的大图保持PNG(self):
+        Image = pytest.importorskip('PIL.Image')
+        with TemporaryDirectory() as d:
+            p = Path(d) / 'alpha.png'
+            Image.new('RGBA', (3000, 3000), (0, 0, 0, 0)).save(p)
+            header, _, size = self._embed(p, 'image/png')
+            assert header == 'data:image/png;base64'
+            assert size == (2048, 2048)
+
+    def test_尺寸和体积都在上限内的图片原样发送(self):
+        Image = pytest.importorskip('PIL.Image')
+        with TemporaryDirectory() as d:
+            p = Path(d) / 'small.jpg'
+            Image.new('RGB', (800, 600), (1, 2, 3)).save(p, quality=95)
+            header, raw, _ = self._embed(p, 'image/jpeg')
+            assert header == 'data:image/jpeg;base64'
+            assert raw == p.read_bytes()
+
+
 # ── _is_valid_image magic-byte checks ────────────────────────────────────────
 
 from api.streaming import _is_valid_image
