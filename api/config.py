@@ -1595,6 +1595,37 @@ def _provider_discover_allowed(provider_cfg: object) -> bool:
     return bool(discover)
 
 
+def _user_provider_probe_base_url(provider_cfg: object) -> str:
+    """Endpoint to live-probe for a user-defined ``providers.<id>`` entry, or "".
+
+    Mirrors Hermes Agent's ``model_switch_providers._entry_base_url`` key order
+    (``base_url``, ``url``, ``api``). Entries that pin a ``models:`` catalog or
+    opt out with ``discover_models: false`` are not probed.
+    """
+    if not isinstance(provider_cfg, dict) or not _provider_discover_allowed(provider_cfg):
+        return ""
+    configured = provider_cfg.get("models")
+    if isinstance(configured, (dict, list)) and len(configured) > 0:
+        return ""
+    for key in ("base_url", "url", "api"):
+        value = str(provider_cfg.get(key) or "").strip()
+        if value:
+            return value.rstrip("/")
+    return ""
+
+
+def _user_provider_api_key(provider_cfg: dict) -> str:
+    """Inline ``api_key`` first, then the ``key_env`` / ``api_key_env`` variable."""
+    inline = str(provider_cfg.get("api_key") or "").strip()
+    if inline:
+        return inline
+    for key in ("key_env", "api_key_env"):
+        env_name = str(provider_cfg.get(key) or "").strip()
+        if env_name:
+            return _thread_local_env_value(env_name).strip()
+    return ""
+
+
 def _provider_models_are_discovered_catalog(provider_cfg: object) -> bool:
     """True when ``models:`` is an auto-discovered catalog that should defer to the live probe.
 
@@ -10382,6 +10413,11 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     if isinstance(configured_models, (dict, list)) and len(configured_models) > 0:
                         continue
                     count += 1
+            for _pid, entry in _get_providers_cfg().items():
+                if str(_pid).strip().lower() == "lmstudio":
+                    continue  # LM Studio is counted by its own branch below.
+                if _user_provider_probe_base_url(entry):
+                    count += 1
             # The LM Studio provider-group branch re-probes the same
             # /v1/models endpoint from ``providers.lmstudio.base_url`` in its own
             # right — the second consumer of a single dead LAN endpoint in the
@@ -11129,6 +11165,28 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                                 pid,
                                 _memoized_live_lookup(pid, lambda pid=pid: _read_live_provider_model_ids(pid)),
                             )
+                            _ep_base = (
+                                _user_provider_probe_base_url(provider_cfg)
+                                if not raw_models
+                                else ""
+                            )
+                            if _ep_base:
+                                # User-defined ``providers.<id>`` endpoint: hermes_cli's
+                                # provider_model_ids() only knows built-in catalogs, so probe
+                                # ``/v1/models`` the way Hermes Agent's picker does for these
+                                # entries (model_switch_providers._discover_endpoint_models).
+                                raw_models, _ep_error = _read_custom_endpoint_models(
+                                    _ep_base,
+                                    pid,
+                                    api_key=_user_provider_api_key(provider_cfg),
+                                    trusted_base_urls=(_ep_base,),
+                                    timeout_seconds=custom_probe_schedule.next_timeout(),
+                                )
+                                if _ep_error:
+                                    logger.warning(
+                                        "Live /v1/models probe failed for provider %s: %s",
+                                        pid, _ep_error.get("message"),
+                                    )
                             if (
                                 not raw_models
                                 and _provider_models_are_discovered_catalog(provider_cfg)
