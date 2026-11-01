@@ -1,0 +1,10 @@
+[Unit]
+Description=每天北京时间 04:00 自动升级 Hermes WebUI / Agent
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Shanghai
+# 错过 04:00（如关机）不补跑，避免白天升级打断使用
+Persistent=false
+
+[Install]
+WantedBy=timers.target

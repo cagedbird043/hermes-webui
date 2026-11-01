@@ -1,0 +1,10 @@
+[Unit]
+Description=Hermes WebUI / Agent 每日自动升级
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/libexec/hermes-autoupdate/hermes_autoupdate.py
+# 最多等 2 小时空闲，再加拉镜像、健康检查与回滚的时间
+TimeoutStartSec=4h

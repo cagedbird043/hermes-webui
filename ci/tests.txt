@@ -1,0 +1,4 @@
+# cb 补丁栈的测试（路径相对补丁分支根目录）；补丁增删时同步维护。
+tests/test_native_image_attachments.py
+tests/test_user_provider_endpoint_discovery.py
+tests/test_custom_provider_display_name.py

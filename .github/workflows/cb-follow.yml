@@ -1,0 +1,102 @@
+# 跟进上游稳定 tag：把最新 cb/vX.Y.Z 补丁栈变基到上游最新 vX.Y.Z，跑补丁测试，推送新分支。
+# 任何失败都会停用本 workflow；sjc-edge 每天 04:00 的升级脚本会读取结果并通过 Telegram 提醒。
+name: cb-follow
+
+on:
+  schedule:
+    - cron: '17 18 * * *' # 北京时间 02:17，留出排队延迟，早于服务器 04:00 的升级
+  workflow_dispatch:
+
+concurrency:
+  group: cb-follow
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  UPSTREAM_URL: https://github.com/nesquena/hermes-webui.git
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  follow:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检查 CB_DEPLOY_KEY
+        env:
+          DEPLOY_KEY: ${{ secrets.CB_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::缺少仓库 secret CB_DEPLOY_KEY（可写 deploy key）"
+            exit 1
+          fi
+
+      # 用 deploy key 推送：上游新 tag 可能改动 .github/workflows，GITHUB_TOKEN 无权推送这类提交。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.CB_DEPLOY_KEY }}
+
+      - name: 自动化脚本测试
+        run: python3 -m unittest discover -s tests
+
+      - name: 选择上游 tag
+        id: select
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags upstream '+refs/tags/v*:refs/tags/v*'
+          python3 ci/follow.py select | tee -a "$GITHUB_OUTPUT"
+
+      - name: 变基补丁栈
+        if: steps.select.outputs.next != ''
+        env:
+          BASE: ${{ steps.select.outputs.base }}
+          NEXT: ${{ steps.select.outputs.next }}
+        run: |
+          git config --global user.name cagedbird043
+          git config --global user.email cagedbird043@gmail.com
+          changed="$(git diff --name-only "$BASE" "$NEXT" -- requirements.txt | paste -sd ' ')"
+          if [ -n "$changed" ]; then
+            echo "::error::上游 $NEXT 改了运行依赖（$changed），webui-pydeps 需要人工更新"
+            exit 1
+          fi
+          git worktree add -q -b "cb/$NEXT" work "origin/cb/$BASE"
+          if ! git -C work rebase -q --onto "$NEXT" "$BASE"; then
+            files="$(git -C work diff --name-only --diff-filter=U | paste -sd ' ')"
+            git -C work rebase --abort
+            echo "::error::变基冲突（cb/$BASE → $NEXT）：${files:-未知文件}"
+            exit 1
+          fi
+          {
+            echo "### cb/$BASE → cb/$NEXT"
+            echo '```'
+            git -C work range-diff "$BASE..origin/cb/$BASE" "$NEXT..HEAD"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@v5
+        if: steps.select.outputs.next != ''
+        with:
+          python-version: '3.12'
+
+      - name: 补丁测试
+        if: steps.select.outputs.next != ''
+        working-directory: work
+        run: |
+          python -m pip install -q -r requirements-dev.txt pillow
+          mapfile -t tests < <(grep -vE '^\s*(#|$)' ../ci/tests.txt)
+          if ! python -m pytest -q -p no:cacheprovider "${tests[@]}"; then
+            echo "::error::补丁测试失败（cb/${{ steps.select.outputs.next }}），详见本次运行日志"
+            exit 1
+          fi
+
+      - name: 推送新补丁分支
+        if: steps.select.outputs.next != ''
+        env:
+          NEXT: ${{ steps.select.outputs.next }}
+        run: git -C work push origin "HEAD:refs/heads/cb/$NEXT"
+
+      - name: 失败后停用 cb-follow
+        if: failure()
+        run: gh workflow disable cb-follow.yml -R "$GITHUB_REPOSITORY"
