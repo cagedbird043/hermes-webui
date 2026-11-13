@@ -86,7 +86,7 @@ def test_自定义provider按api地址和key_env实时发现模型(relay):
             "default_model": "relay-model-a",
         },
     })
-    assert _group_ids(result, "myrelay") == _IDS
+    assert _group_ids(result, "custom:myrelay") == _IDS
     assert hits and hits[0] == ("/v1/models", f"Bearer {_KEY}")
 
 
@@ -101,7 +101,7 @@ def test_写死模型或关闭发现的自定义provider不探测(relay):
             "models": {"pinned-model": {"context_length": 1000}},
         },
     }, default_model="pinned-model")
-    assert _group_ids(result, "myrelay") == ["pinned-model"]
+    assert _group_ids(result, "custom:myrelay") == ["pinned-model"]
     assert hits == []
 
 
@@ -121,5 +121,5 @@ def test_已发现目录的模型元数据不阻止拉取新增模型(relay):
             },
         },
     })
-    assert _group_ids(result, "myrelay") == _IDS
+    assert _group_ids(result, "custom:myrelay") == _IDS
     assert hits and hits[0] == ("/v1/models", f"Bearer {_KEY}")
