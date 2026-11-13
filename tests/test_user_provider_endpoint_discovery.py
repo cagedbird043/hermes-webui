@@ -103,3 +103,23 @@ def test_写死模型或关闭发现的自定义provider不探测(relay):
     }, default_model="pinned-model")
     assert _group_ids(result, "myrelay") == ["pinned-model"]
     assert hits == []
+
+
+def test_已发现目录的模型元数据不阻止拉取新增模型(relay):
+    base, hits = relay
+    result = _models_with_providers({
+        "myrelay": {
+            "api": base,
+            "key_env": "TEST_RELAY_KEY",
+            "discover_models": True,
+            "models_discovered": True,
+            "models": {
+                "relay-model-a": {
+                    "context_length": 1048576,
+                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
+                },
+            },
+        },
+    })
+    assert _group_ids(result, "myrelay") == _IDS
+    assert hits and hits[0] == ("/v1/models", f"Bearer {_KEY}")
