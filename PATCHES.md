@@ -11,7 +11,7 @@
 | 补丁 | 说明 |
 |---|---|
 | 原生图片嵌入前缩到长边 2048 | `api/streaming.py` `_downscale_for_native_embed`：按 EXIF 转正，长边超过 2048 或原文件超过 3 MiB 时重编码为 JPEG（质量 85，带透明通道则为 PNG）；SVG、GIF 与 Pillow 无法解码的文件原样发送。 |
-| providers 自定义端点实时发现模型 | `api/config.py` `_user_provider_probe_base_url` / `_user_provider_api_key`：`providers.<id>` 条目没有写死 `models` 且未关闭 `discover_models` 时，按 `base_url`/`url`/`api` 与 `key_env` 探测 `/v1/models`（`hermes_cli.provider_model_ids` 只认内置 provider，原先这类分组只剩默认模型）。 |
+| providers 自定义端点实时发现模型 | `api/config.py` `_user_provider_probe_base_url` / `_user_provider_api_key`：`providers.<id>` 未关闭 `discover_models`，且没有手工固定目录时，按 `base_url`/`url`/`api` 与 `key_env` 探测 `/v1/models`。`models_discovered: true` 的目录可以保留上下文和思考档位元数据，同时继续发现新增模型。 |
 | 本文件 | 补丁栈说明。 |
 
 ## 升级到新 tag
