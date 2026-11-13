@@ -1864,13 +1864,17 @@ def _user_provider_probe_base_url(provider_cfg: object) -> str:
     """Endpoint to live-probe for a user-defined ``providers.<id>`` entry, or "".
 
     Mirrors Hermes Agent's ``model_switch_providers._entry_base_url`` key order
-    (``base_url``, ``url``, ``api``). Entries that pin a ``models:`` catalog or
+    (``base_url``, ``url``, ``api``). Hand-curated catalogs and entries that
     opt out with ``discover_models: false`` are not probed.
     """
     if not isinstance(provider_cfg, dict) or not _provider_discover_allowed(provider_cfg):
         return ""
     configured = provider_cfg.get("models")
-    if isinstance(configured, (dict, list)) and len(configured) > 0:
+    if (
+        isinstance(configured, (dict, list))
+        and len(configured) > 0
+        and not _provider_models_are_discovered_catalog(provider_cfg)
+    ):
         return ""
     for key in ("base_url", "url", "api"):
         value = str(provider_cfg.get(key) or "").strip()
